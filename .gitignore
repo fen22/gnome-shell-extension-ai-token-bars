@@ -1,0 +1,9 @@
+*.shell-extension.zip
+dist/
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+node_modules/
+.codex/
+.claude/

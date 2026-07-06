@@ -1,0 +1,20 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check GNOME extension JavaScript syntax
+        run: node --check extension/extension.js
+
+      - name: Check Python helpers
+        run: python3 -m py_compile scripts/claude-statusline.py scripts/configure-claude-statusline.py
+
+      - name: Check metadata
+        run: python3 -m json.tool extension/metadata.json >/dev/null
