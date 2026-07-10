@@ -4,5 +4,5 @@
   "description": "Shows Codex and Claude Code usage bars in the GNOME top panel.",
   "shell-version": ["42"],
   "url": "https://github.com/fen22/gnome-shell-extension-ai-token-bars",
-  "version": 1
+  "version": 2
 }

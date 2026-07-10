@@ -20,3 +20,7 @@
 .codex-token-menu-muted {
   color: #a8a8a8;
 }
+
+.codex-token-menu-label {
+  max-width: 320px;
+}

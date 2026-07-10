@@ -2,7 +2,7 @@
 
 const ByteArray = imports.byteArray;
 const Cairo = imports.cairo;
-const { Clutter, Gio, GLib, GObject, St } = imports.gi;
+const { Clutter, Gio, GLib, GObject, Pango, St } = imports.gi;
 const Main = imports.ui.main;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
@@ -17,6 +17,7 @@ const CODEX_BAR_WIDTH = 86;
 const CLAUDE_BAR_WIDTH = 86;
 const BAR_HEIGHT = 7;
 const CLAUDE_STALE_SECONDS = 120;
+const MENU_LABEL_MAX_CHARS = 80;
 
 const COLORS = {
     codex: [0.34, 0.78, 0.52, 1],
@@ -53,12 +54,18 @@ function formatDuration(seconds) {
     return `${minutes}m`;
 }
 
-function formatTime(epochSeconds) {
-    if (!epochSeconds)
-        return 'unknown';
+// Any text that reaches the popup menu (thread titles, sqlite/JSON error
+// text, etc.) can be arbitrarily long or multi-line. Collapse it to a single
+// short line so the menu can never grow past a sane size.
+function safeLabelText(value, maxChars = MENU_LABEL_MAX_CHARS) {
+    let text = String(value === undefined || value === null ? '' : value)
+        .replace(/\s+/g, ' ')
+        .trim();
 
-    let date = GLib.DateTime.new_from_unix_local(epochSeconds);
-    return date ? date.format('%Y-%m-%d %H:%M:%S') : 'unknown';
+    if (text.length > maxChars)
+        text = `${text.slice(0, maxChars - 1)}…`;
+
+    return text;
 }
 
 function clamp(value, min, max) {
@@ -262,6 +269,20 @@ function createSourceGroup(icon, progressActor) {
     return group;
 }
 
+// A popup menu row that can never grow past one line: wrapping is disabled
+// and overflow is ellipsized instead of expanding the menu's height/width.
+function createInfoItem(text = '') {
+    let item = new PopupMenu.PopupMenuItem(safeLabelText(text), { reactive: false });
+    item.label.style_class = 'codex-token-menu-label';
+    item.label.clutter_text.set_line_wrap(false);
+    item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+    return item;
+}
+
+function setInfoItemText(item, text) {
+    item.label.set_text(safeLabelText(text));
+}
+
 const AITokenBars = GObject.registerClass(
 class AITokenBars extends PanelMenu.Button {
     _init() {
@@ -281,33 +302,23 @@ class AITokenBars extends PanelMenu.Button {
         this._box.add_child(createSourceGroup(createClaudeIcon(), this._claudeBar.actor));
         this.add_child(this._box);
 
-        this._codexStatusItem = new PopupMenu.PopupMenuItem('Loading Codex limit usage...', {
-            reactive: false,
-        });
-        this._codexPrimaryItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this._codexSecondaryItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this._codexUpdatedItem = new PopupMenu.PopupMenuItem('', { reactive: false });
+        this._codexStatusItem = createInfoItem('Loading Codex limit usage...');
+        this._codexResetItem = createInfoItem('');
+        this._codexSessionsItem = createInfoItem('');
 
-        this._claudeStatusItem = new PopupMenu.PopupMenuItem('Loading Claude limit usage...', {
-            reactive: false,
-        });
-        this._claudeFiveHourItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this._claudeWeeklyItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this._claudeContextItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this._claudeUpdatedItem = new PopupMenu.PopupMenuItem('', { reactive: false });
+        this._claudeStatusItem = createInfoItem('Loading Claude limit usage...');
+        this._claudeResetItem = createInfoItem('');
+        this._claudeWeeklyItem = createInfoItem('');
 
         this._refreshItem = new PopupMenu.PopupMenuItem('Refresh now');
 
         this.menu.addMenuItem(this._codexStatusItem);
-        this.menu.addMenuItem(this._codexPrimaryItem);
-        this.menu.addMenuItem(this._codexSecondaryItem);
-        this.menu.addMenuItem(this._codexUpdatedItem);
+        this.menu.addMenuItem(this._codexResetItem);
+        this.menu.addMenuItem(this._codexSessionsItem);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addMenuItem(this._claudeStatusItem);
-        this.menu.addMenuItem(this._claudeFiveHourItem);
+        this.menu.addMenuItem(this._claudeResetItem);
         this.menu.addMenuItem(this._claudeWeeklyItem);
-        this.menu.addMenuItem(this._claudeContextItem);
-        this.menu.addMenuItem(this._claudeUpdatedItem);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addMenuItem(this._refreshItem);
 
@@ -344,13 +355,12 @@ class AITokenBars extends PanelMenu.Button {
                 throw new Error(`${CODEX_DB} does not exist`);
 
             let latest = firstLineFields(runSql(
-                "select rollout_path, replace(coalesce(nullif(title,''),'Untitled'), char(10), ' '), updated_at " +
+                "select rollout_path, (select count(*) from threads where archived = 0) " +
                 "from threads where archived = 0 order by updated_at desc limit 1;"
             ));
 
             let rolloutPath = latest[0] || '';
-            let title = latest[1] || 'Untitled';
-            let updatedAt = intFrom(latest[2] || '0');
+            let openSessions = intFrom(latest[1] || '0');
 
             if (!rolloutPath)
                 throw new Error('Latest Codex thread has no rollout path');
@@ -358,7 +368,6 @@ class AITokenBars extends PanelMenu.Button {
             let tokenCount = latestTokenCountFromRollout(rolloutPath);
             let rateLimits = tokenCount.rate_limits || {};
             let primary = rateLimits.primary || {};
-            let secondary = rateLimits.secondary || {};
 
             let usedPercent = numberFrom(primary.used_percent);
             let leftPercent = Number.isFinite(usedPercent) ? Math.max(0, 100 - usedPercent) : NaN;
@@ -366,23 +375,15 @@ class AITokenBars extends PanelMenu.Button {
             let resetIn = resetAt ? resetAt - GLib.DateTime.new_now_local().to_unix() : NaN;
 
             this._setBar(this._codexBar, usedPercent, this._codexColorFor(usedPercent));
-            this._codexStatusItem.label.set_text(`Codex: ${formatPercent(usedPercent)} used, ${formatPercent(leftPercent)} left`);
-            this._codexPrimaryItem.label.set_text(
-                `Primary window: ${formatPercent(usedPercent)} used / ${formatPercent(leftPercent)} left (${primary.window_minutes || '?'} min)`
-            );
-            this._codexSecondaryItem.label.set_text(
-                `Weekly window: ${formatPercent(numberFrom(secondary.used_percent))} used (${secondary.window_minutes || '?'} min)`
-            );
-            this._codexUpdatedItem.label.set_text(
-                `Resets in ${formatDuration(resetIn)} at ${formatTime(resetAt)} · ${title} · updated ${formatTime(updatedAt)}`
-            );
+            setInfoItemText(this._codexStatusItem, `Codex: ${formatPercent(usedPercent)} used, ${formatPercent(leftPercent)} left`);
+            setInfoItemText(this._codexResetItem, `Resets in ${formatDuration(resetIn)}`);
+            setInfoItemText(this._codexSessionsItem, `${openSessions} open session${openSessions === 1 ? '' : 's'}`);
         } catch (error) {
             log(`[${UUID}] Codex: ${error.message}`);
             this._setBar(this._codexBar, 0, COLORS.codex);
-            this._codexStatusItem.label.set_text(`Codex usage unavailable: ${error.message}`);
-            this._codexPrimaryItem.label.set_text('');
-            this._codexSecondaryItem.label.set_text('');
-            this._codexUpdatedItem.label.set_text('');
+            setInfoItemText(this._codexStatusItem, `Codex usage unavailable: ${error.message}`);
+            setInfoItemText(this._codexResetItem, '');
+            setInfoItemText(this._codexSessionsItem, '');
         }
     }
 
@@ -397,7 +398,6 @@ class AITokenBars extends PanelMenu.Button {
             let fiveHour = rateLimits.five_hour || {};
             let weekly = rateLimits.seven_day || {};
             let context = status.context_window || {};
-            let model = status.model || {};
 
             let fiveHourUsed = numberFrom(fiveHour.used_percentage);
             let contextUsed = numberFrom(context.used_percentage);
@@ -406,40 +406,29 @@ class AITokenBars extends PanelMenu.Button {
             let leftPercent = Number.isFinite(usedPercent) ? Math.max(0, 100 - usedPercent) : NaN;
             let resetAt = intFrom(fiveHour.resets_at);
             let resetIn = resetAt ? resetAt - now : NaN;
-            let weeklyResetAt = intFrom(weekly.resets_at);
+            let weeklyUsed = numberFrom(weekly.used_percentage);
 
             this._setBar(this._claudeBar, usedPercent, COLORS.claude);
 
             let freshness = stale ? ` · stale ${formatDuration(age)} old` : '';
-            this._claudeStatusItem.label.set_text(
+            setInfoItemText(
+                this._claudeStatusItem,
                 `Claude: ${formatPercent(usedPercent)} used, ${formatPercent(leftPercent)} left (${source})${freshness}`
             );
-            this._claudeFiveHourItem.label.set_text(
-                Number.isFinite(fiveHourUsed)
-                    ? `5-hour window: ${formatPercent(fiveHourUsed)} used / ${formatPercent(Math.max(0, 100 - fiveHourUsed))} left · resets in ${formatDuration(resetIn)} at ${formatTime(resetAt)}`
-                    : '5-hour window: unavailable until Claude Code reports subscription limits'
+            setInfoItemText(
+                this._claudeResetItem,
+                Number.isFinite(fiveHourUsed) ? `Resets in ${formatDuration(resetIn)}` : ''
             );
-            this._claudeWeeklyItem.label.set_text(
-                Number.isFinite(numberFrom(weekly.used_percentage))
-                    ? `Weekly window: ${formatPercent(numberFrom(weekly.used_percentage))} used · resets at ${formatTime(weeklyResetAt)}`
-                    : 'Weekly window: unavailable'
-            );
-            this._claudeContextItem.label.set_text(
-                Number.isFinite(contextUsed)
-                    ? `Context window: ${formatPercent(contextUsed)} used / ${formatPercent(Math.max(0, 100 - contextUsed))} left`
-                    : 'Context window: unavailable'
-            );
-            this._claudeUpdatedItem.label.set_text(
-                `${model.display_name || model.id || 'Claude Code'} · updated ${formatTime(updatedAt)}`
+            setInfoItemText(
+                this._claudeWeeklyItem,
+                Number.isFinite(weeklyUsed) ? `Weekly: ${formatPercent(weeklyUsed)} used` : ''
             );
         } catch (error) {
             log(`[${UUID}] Claude: ${error.message}`);
             this._setBar(this._claudeBar, 0, COLORS.claude);
-            this._claudeStatusItem.label.set_text('Claude usage unavailable: start Claude Code and send one prompt');
-            this._claudeFiveHourItem.label.set_text(error.message);
-            this._claudeWeeklyItem.label.set_text('');
-            this._claudeContextItem.label.set_text('');
-            this._claudeUpdatedItem.label.set_text('');
+            setInfoItemText(this._claudeStatusItem, 'Claude usage unavailable: start Claude Code and send one prompt');
+            setInfoItemText(this._claudeResetItem, error.message);
+            setInfoItemText(this._claudeWeeklyItem, '');
         }
     }
 
