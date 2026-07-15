@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Prevent stale idle Claude sessions from overwriting newer five-hour and
+  weekly usage in the shared status cache.
+- Ignore expired Claude limit windows and use the limit closest to exhaustion
+  for the panel bar.
+
 ## 0.2.0
 
 - Fix popup menu growing to fill the screen when a Codex thread title held a long/multi-line prompt.

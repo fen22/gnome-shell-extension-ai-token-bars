@@ -25,10 +25,11 @@ This is intentionally read-only.
 
 1. Claude Code calls the configured `statusLine` command.
 2. `scripts/claude-statusline.py` receives Claude's live status payload.
-3. The script writes `~/.cache/claude-token-bar/status.json`.
+3. The script locks and merges `~/.cache/claude-token-bar/status.json`, rejecting
+   expired windows and stale observations from other Claude sessions.
 4. The extension reads that cache every refresh cycle.
-5. It uses the five-hour rate-limit percentage when available, otherwise the
-   context-window percentage.
+5. It uses the more-consumed valid five-hour or weekly rate-limit percentage,
+   otherwise the context-window percentage.
 
 ## Refresh Cost
 

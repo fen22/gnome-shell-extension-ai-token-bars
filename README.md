@@ -61,8 +61,11 @@ helper script writes only usage metadata to:
 ~/.cache/claude-token-bar/status.json
 ```
 
-The Claude bar uses `rate_limits.five_hour.used_percentage` when available and
-falls back to `context_window.used_percentage`.
+The Claude bar compares the current five-hour and weekly rate-limit windows and
+shows whichever valid window is closer to exhaustion. Expired windows are
+ignored, and context-window usage is used only until subscription limits are
+available. Concurrent Claude sessions are merged by reset window so an idle
+session cannot overwrite newer account usage.
 
 ## Repository Layout
 

@@ -7,6 +7,7 @@ CLAUDE_STATUSLINE := $(HOME)/.claude/ai-token-bars-statusline.py
 check:
 	node --check extension/extension.js
 	python3 -m py_compile scripts/claude-statusline.py scripts/configure-claude-statusline.py
+	python3 -m unittest discover -s tests
 	python3 -m json.tool extension/metadata.json >/dev/null
 
 install:

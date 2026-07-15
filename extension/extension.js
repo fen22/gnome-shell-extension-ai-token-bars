@@ -400,13 +400,32 @@ class AITokenBars extends PanelMenu.Button {
             let context = status.context_window || {};
 
             let fiveHourUsed = numberFrom(fiveHour.used_percentage);
-            let contextUsed = numberFrom(context.used_percentage);
-            let usedPercent = Number.isFinite(fiveHourUsed) ? fiveHourUsed : contextUsed;
-            let source = Number.isFinite(fiveHourUsed) ? '5-hour limit' : 'context window';
-            let leftPercent = Number.isFinite(usedPercent) ? Math.max(0, 100 - usedPercent) : NaN;
-            let resetAt = intFrom(fiveHour.resets_at);
-            let resetIn = resetAt ? resetAt - now : NaN;
+            let fiveHourResetAt = intFrom(fiveHour.resets_at);
+            let fiveHourValid = Number.isFinite(fiveHourUsed) &&
+                (!fiveHourResetAt || fiveHourResetAt > now);
             let weeklyUsed = numberFrom(weekly.used_percentage);
+            let weeklyResetAt = intFrom(weekly.resets_at);
+            let weeklyValid = Number.isFinite(weeklyUsed) &&
+                (!weeklyResetAt || weeklyResetAt > now);
+            let contextUsed = numberFrom(context.used_percentage);
+
+            let selectedLimit = null;
+            if (fiveHourValid) {
+                selectedLimit = {
+                    usedPercent: fiveHourUsed,
+                    source: '5-hour limit',
+                };
+            }
+            if (weeklyValid && (!selectedLimit || weeklyUsed > selectedLimit.usedPercent)) {
+                selectedLimit = {
+                    usedPercent: weeklyUsed,
+                    source: 'weekly limit',
+                };
+            }
+
+            let usedPercent = selectedLimit ? selectedLimit.usedPercent : contextUsed;
+            let source = selectedLimit ? selectedLimit.source : 'context window';
+            let leftPercent = Number.isFinite(usedPercent) ? Math.max(0, 100 - usedPercent) : NaN;
 
             this._setBar(this._claudeBar, usedPercent, COLORS.claude);
 
@@ -417,11 +436,15 @@ class AITokenBars extends PanelMenu.Button {
             );
             setInfoItemText(
                 this._claudeResetItem,
-                Number.isFinite(fiveHourUsed) ? `Resets in ${formatDuration(resetIn)}` : ''
+                fiveHourValid
+                    ? `5-hour: ${formatPercent(fiveHourUsed)} used · resets in ${formatDuration(fiveHourResetAt - now)}`
+                    : ''
             );
             setInfoItemText(
                 this._claudeWeeklyItem,
-                Number.isFinite(weeklyUsed) ? `Weekly: ${formatPercent(weeklyUsed)} used` : ''
+                weeklyValid
+                    ? `Weekly: ${formatPercent(weeklyUsed)} used · resets in ${formatDuration(weeklyResetAt - now)}`
+                    : ''
             );
         } catch (error) {
             log(`[${UUID}] Claude: ${error.message}`);
